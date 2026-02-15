@@ -1,0 +1,33 @@
+[
+  {
+    "title": "Sony WH-1000XM5 Wireless Noise Canceling Headphones",
+    "brand": "Sony",
+    "upc": "027242925120",
+    "imageUrl": "https://m.media-amazon.com/images/I/61v0Fpn5uDL._AC_SL1500_.jpg"
+  },
+  {
+    "title": "Apple AirPods Pro (2nd generation)",
+    "brand": "Apple",
+    "upc": "194253397594",
+    "imageUrl": "https://m.media-amazon.com/images/I/61SUj2aKoEL._AC_SL1500_.jpg"
+  },
+  {
+    "title": "Pringles Cheddar Cheese Potato Crisps",
+    "brand": "Pringles",
+    "upc": "038000201992",
+    "imageUrl": "https://images.openfoodfacts.org/images/products/003/800/020/1992/front_en.7.400.jpg"
+  },
+  {
+    "title": "NABISCO OREO Golden Sandwich Cookies Snack Pack 0.78 oz",
+    "brand": "Oreo",
+    "upc": "044000002786",
+    "imageUrl": "https://images.openfoodfacts.org/images/products/004/400/000/2786/front_en.6.400.jpg"
+  },
+  {
+    "title": "Owala FreeSip Stainless Steel Water Bottle 24 oz",
+    "brand": "Owala",
+    "upc": null,
+    "imageUrl": null
+  }
+]
+

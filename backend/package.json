@@ -1,0 +1,24 @@
+{
+  "name": "omnicart-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "dev": "nodemon src/index.js",
+    "start": "node src/index.js",
+    "prisma:generate": "prisma generate",
+    "prisma:push": "node prisma/touch-db.js && prisma db push",
+    "prisma:reset": "node prisma/reset-db.js && prisma db push && node prisma/seed.js",
+    "prisma:seed": "node prisma/seed.js"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11",
+    "prisma": "6.19.2"
+  }
+}

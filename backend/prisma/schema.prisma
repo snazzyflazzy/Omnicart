@@ -1,0 +1,115 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                     String    @id @default(cuid())
+  name                   String
+  email                  String    @unique
+  preference             String    @default("BALANCED")
+  visaTestToken          String?
+  defaultPctDropThreshold Float     @default(15.0)
+  defaultTargetPriceCents Int?
+  shippingImprovementOn  Boolean   @default(false)
+  addresses              Address[]
+  watchlist              Watchlist[]
+  orders                 Order[]
+  createdAt              DateTime  @default(now())
+}
+
+model Address {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  line1     String
+  city      String
+  state     String
+  zip       String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Product {
+  id       String   @id @default(cuid())
+  title    String
+  brand    String
+  upc      String?  @unique
+  imageUrl String?
+  offers   Offer[]
+  watchers Watchlist[]
+  orders   Order[]
+}
+
+model Offer {
+  id            String   @id @default(cuid())
+  productId     String
+  vendorId      String
+  vendorName    String
+  title         String
+  priceCents    Int
+  shippingCents Int
+  etaDays       Int
+  inStock       Boolean  @default(true)
+  productUrl    String
+  updatedAt     DateTime @updatedAt
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, vendorId])
+}
+
+model Watchlist {
+  id                    String   @id @default(cuid())
+  userId                String
+  productId             String
+  pctDropThreshold      Float    @default(15.0)
+  targetPriceCents      Int?
+  shippingImprovementOn Boolean  @default(false)
+  preferredOfferId      String?
+  preferredVendorId     String?
+  preferredVendorName   String?
+  preferredProductUrl   String?
+  createdAt             DateTime @default(now())
+  lastNotifiedAt        DateTime?
+  lastSeenBestPriceCents Int?
+  lastSeenBestEtaDays   Int?
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])
+}
+
+model Order {
+  id         String   @id @default(cuid())
+  userId     String
+  productId  String
+  offerId    String
+  totalCents Int
+  status     String   @default("PENDING")
+  createdAt  DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model PendingNotification {
+  id          String   @id @default(cuid())
+  userId      String
+  productId   String
+  message     String
+  type        String
+  payload     String
+  createdAt   DateTime @default(now())
+  deliveredAt DateTime?
+
+  @@index([userId, deliveredAt])
+}

@@ -1,0 +1,27 @@
+[
+  {
+    "vendorId": "mock:amazon",
+    "vendorName": "Amazon",
+    "priceMultiplier": 1.0,
+    "shippingCents": 0,
+    "etaDays": 2,
+    "baseUrl": "https://www.amazon.com/dp/"
+  },
+  {
+    "vendorId": "mock:walmart",
+    "vendorName": "Walmart",
+    "priceMultiplier": 0.97,
+    "shippingCents": 599,
+    "etaDays": 3,
+    "baseUrl": "https://www.walmart.com/ip/"
+  },
+  {
+    "vendorId": "mock:target",
+    "vendorName": "Target",
+    "priceMultiplier": 1.03,
+    "shippingCents": 599,
+    "etaDays": 4,
+    "baseUrl": "https://www.target.com/p/"
+  }
+]
+
