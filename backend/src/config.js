@@ -1,7 +1,9 @@
 const path = require('path');
 const dotenv = require('dotenv');
 
-dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+// Always load the backend `.env` regardless of where the process is started from.
+// (Using `process.cwd()` breaks when the server is launched from the repo root.)
+dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
 
 function bool(value, defaultValue = false) {
   if (value === undefined) return defaultValue;
@@ -59,4 +61,3 @@ module.exports = {
   sharedRemoteWatchlistPullPath: process.env.SHARED_REMOTE_WATCHLIST_PULL_PATH || '/items',
   sharedRemoteWatchlistPullReplace: bool(process.env.SHARED_REMOTE_WATCHLIST_PULL_REPLACE, false)
 };
-

@@ -72,6 +72,145 @@ function normalizeOfferBase({ vendorId, vendorName, title, productUrl, priceCent
   };
 }
 
+function hostnameFromUrl(url) {
+  try {
+    return String(new URL(String(url || '')).hostname || '').toLowerCase().replace(/^www\./i, '');
+  } catch {
+    return '';
+  }
+}
+
+function canonicalizeUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  try {
+    const u = new URL(raw);
+    // Ensure https for iOS ATS + consistency
+    if (u.protocol !== 'https:') u.protocol = 'https:';
+    // Drop fragments
+    u.hash = '';
+    return u.toString();
+  } catch {
+    return raw;
+  }
+}
+
+function canonicalizeVendorUrl(vendorId, url) {
+  const raw = canonicalizeUrl(url);
+  if (!raw) return '';
+  const lower = raw.toLowerCase();
+
+  if (vendorId === 'web:amazon') {
+    const asin = extractAmazonAsinFromUrl(raw);
+    return asin ? `https://www.amazon.com/dp/${asin}` : raw;
+  }
+
+  if (vendorId === 'web:ebay') {
+    // Prefer direct listing pages only: https://www.ebay.com/itm/<id>
+    const m = raw.match(/https?:\/\/(?:www\.)?ebay\.com\/itm\/(\d+)/i);
+    if (m?.[1]) return `https://www.ebay.com/itm/${m[1]}`;
+    return raw;
+  }
+
+  if (vendorId === 'web:walmart') {
+    // Keep only canonical /ip/... path (drop query)
+    try {
+      const u = new URL(raw);
+      if (u.hostname.toLowerCase().includes('walmart.com') && u.pathname.includes('/ip/')) {
+        u.search = '';
+        return u.toString();
+      }
+    } catch {}
+    return raw;
+  }
+
+  if (vendorId === 'web:target') {
+    // Keep /p/ path, drop query when present
+    try {
+      const u = new URL(raw);
+      if (u.hostname.toLowerCase().includes('target.com') && u.pathname.includes('/p/')) {
+        u.search = '';
+        return u.toString();
+      }
+    } catch {}
+    return raw;
+  }
+
+  if (vendorId === 'web:bestbuy') {
+    try {
+      const u = new URL(raw);
+      if (u.hostname.toLowerCase().includes('bestbuy.com') && u.pathname.includes('/site/')) {
+        u.search = '';
+        return u.toString();
+      }
+    } catch {}
+    return raw;
+  }
+
+  if (vendorId === 'web:newegg') {
+    try {
+      const u = new URL(raw);
+      if (u.hostname.toLowerCase().includes('newegg.com') && u.pathname.includes('/p/')) {
+        u.search = '';
+        return u.toString();
+      }
+    } catch {}
+    return raw;
+  }
+
+  return raw;
+}
+
+function isExactListingUrl(url) {
+  const u = String(url || '').toLowerCase();
+  if (!u.startsWith('http')) return false;
+  if (u.includes('/s?') || u.includes('/search') || u.includes('?q=') || u.includes('&q=') || u.includes('_nkw=')) {
+    return false;
+  }
+  if (
+    u.includes('/dp/') ||
+    u.includes('/gp/product/') ||
+    u.includes('/itm/') ||
+    u.includes('walmart.com/ip/') ||
+    u.includes('target.com/p/') ||
+    u.includes('bestbuy.com/site/') ||
+    u.includes('newegg.com/p/')
+  ) {
+    return true;
+  }
+  // For other domains, accept non-search, non-query URLs as "listing-ish".
+  // (Shopping engines often return canonical product pages.)
+  try {
+    const parsed = new URL(u);
+    return parsed.pathname.length >= 2;
+  } catch {
+    return false;
+  }
+}
+
+function slugifyDomain(hostname) {
+  return String(hostname || '')
+    .toLowerCase()
+    .replace(/^www\./i, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+}
+
+function friendlyVendorName(hostname) {
+  const h = String(hostname || '').toLowerCase().replace(/^www\./i, '');
+  if (!h) return 'Vendor';
+  if (h.endsWith('ebay.com')) return 'eBay';
+  if (h.endsWith('walmart.com')) return 'Walmart';
+  if (h.endsWith('target.com')) return 'Target';
+  if (h.endsWith('bestbuy.com')) return 'Best Buy';
+  if (h.endsWith('newegg.com')) return 'Newegg';
+  if (h.endsWith('amazon.com')) return 'Amazon';
+  // Use the registrable-ish first label as a readable name.
+  const first = h.split('.')[0] || h;
+  return first.slice(0, 1).toUpperCase() + first.slice(1);
+}
+
 async function fetchAmazonOffer(query, strategy) {
   const timeoutMs = Math.max(3500, config.webSearchRequestTimeoutMs || 5500);
   const serp = await searchOffersViaSerpApi({
@@ -92,7 +231,7 @@ async function fetchAmazonOffer(query, strategy) {
           vendorId: 'web:amazon',
           vendorName: 'Amazon',
           title: r.title,
-          productUrl: r.link,
+          productUrl: canonicalizeVendorUrl('web:amazon', r.link),
           priceCents: parsePriceCents(r.extracted_price || r.price),
           etaDays: eta
         }),
@@ -122,7 +261,7 @@ async function fetchAmazonOffer(query, strategy) {
       title: normalizeWhitespace(detail?.title) || bestSeed.title,
       priceCents,
       etaDays: eta,
-      productUrl: url || bestSeed.productUrl,
+      productUrl: canonicalizeVendorUrl('web:amazon', url || bestSeed.productUrl),
       listingVerified: Boolean(url && url.includes('/dp/')),
       listingType: url && url.includes('/dp/') ? 'EXACT' : bestSeed.listingType
     };
@@ -131,86 +270,90 @@ async function fetchAmazonOffer(query, strategy) {
   }
 }
 
-async function fetchEbayOffer(query, strategy) {
+async function fetchShoppingVendors(query, strategy) {
+  // One SerpAPI call that often includes prices for multiple vendors.
+  // We then pick up to 2 distinct non-Amazon vendors (prefer eBay if present).
   const timeoutMs = Math.max(3500, config.webSearchRequestTimeoutMs || 5500);
   const serp = await searchOffersViaSerpApi({
     query,
-    host: 'ebay.com',
-    engine: 'google',
-    timeoutMs,
-    limit: 8
-  });
-
-  const candidates = serp
-    .map((r, idx) => {
-      const link = String(r.link || '').trim();
-      if (!link.includes('/itm/')) return null; // avoid search pages
-      const eta = estimateEtaDaysFromText(r.delivery || r.snippet) || 5;
-      return {
-        ...normalizeOfferBase({
-          vendorId: 'web:ebay',
-          vendorName: 'eBay',
-          title: r.title,
-          productUrl: link,
-          priceCents: parsePriceCents(r.extracted_price || r.price),
-          etaDays: eta
-        }),
-        rank: idx
-      };
-    })
-    .filter(Boolean);
-
-  return pickBestOffer(candidates, strategy);
-}
-
-async function fetchMiscOffer(query, strategy) {
-  const timeoutMs = Math.max(3500, config.webSearchRequestTimeoutMs || 5500);
-  const scoped = `${query} (site:walmart.com/ip OR site:target.com/p OR site:bestbuy.com/site OR site:newegg.com/p)`;
-  const serp = await searchOffersViaSerpApi({
-    query: scoped,
     host: '',
-    engine: 'google',
+    engine: 'google_shopping',
     timeoutMs,
-    limit: 10
+    limit: 12
   });
 
   const candidates = serp
     .map((r, idx) => {
       const link = String(r.link || '').trim();
-      if (!link) return null;
-      let vendorName = '';
+      if (!isExactListingUrl(link)) return null;
+      const host = hostnameFromUrl(link);
+      if (!host) return null;
+
+      // Skip Amazon here (handled by dedicated Amazon flow + ASIN hydration).
+      if (host.includes('amazon.')) return null;
+
+      // Only allow known retailers to avoid broken/redirector links.
       let vendorId = '';
-      if (link.includes('walmart.com/')) {
-        vendorName = 'Walmart';
+      let vendorName = '';
+      if (host.endsWith('ebay.com')) {
+        vendorId = 'web:ebay';
+        vendorName = 'eBay';
+        if (!link.includes('/itm/')) return null;
+      } else if (host.endsWith('walmart.com')) {
         vendorId = 'web:walmart';
-      } else if (link.includes('target.com/')) {
-        vendorName = 'Target';
+        vendorName = 'Walmart';
+        if (!link.includes('/ip/')) return null;
+      } else if (host.endsWith('target.com')) {
         vendorId = 'web:target';
-      } else if (link.includes('bestbuy.com/')) {
-        vendorName = 'Best Buy';
+        vendorName = 'Target';
+        if (!link.includes('/p/')) return null;
+      } else if (host.endsWith('bestbuy.com')) {
         vendorId = 'web:bestbuy';
-      } else if (link.includes('newegg.com/')) {
-        vendorName = 'Newegg';
+        vendorName = 'Best Buy';
+        if (!link.includes('/site/')) return null;
+      } else if (host.endsWith('newegg.com')) {
         vendorId = 'web:newegg';
+        vendorName = 'Newegg';
+        if (!link.includes('/p/')) return null;
       } else {
         return null;
       }
+
       const eta = estimateEtaDaysFromText(r.delivery || r.snippet) || 5;
       return {
         ...normalizeOfferBase({
           vendorId,
           vendorName,
           title: r.title,
-          productUrl: link,
+          productUrl: canonicalizeVendorUrl(vendorId, link),
           priceCents: parsePriceCents(r.extracted_price || r.price),
           etaDays: eta
         }),
         rank: idx
       };
     })
-    .filter(Boolean);
+    .filter((c) => c && Number.isFinite(c.priceCents) && c.priceCents > 0);
 
-  return pickBestOffer(candidates, strategy);
+  // Pick up to 2 distinct vendors; prefer including eBay if we have it.
+  const out = [];
+  const seen = new Set();
+
+  const ebay = pickBestOffer(candidates.filter((c) => c.vendorId === 'web:ebay'), strategy);
+  if (ebay && !seen.has(ebay.vendorId)) {
+    out.push(ebay);
+    seen.add(ebay.vendorId);
+  }
+
+  // Then fill remaining slot(s) by overall best, skipping duplicates.
+  const sorted = candidates.slice().sort((a, b) => (a.priceCents || 1e12) - (b.priceCents || 1e12));
+  for (const c of sorted) {
+    if (seen.has(c.vendorId)) continue;
+    out.push(c);
+    seen.add(c.vendorId);
+    if (out.length >= 2) break;
+  }
+
+  return out;
 }
 
 async function fetchTopOffers({ query, strategy }) {
@@ -220,17 +363,17 @@ async function fetchTopOffers({ query, strategy }) {
   const capped = normalizeWhitespace(query);
   if (!capped) return [];
 
-  // Hard cap: 3 searches total (Amazon, eBay, misc).
-  const [amazon, ebay, misc] = await Promise.allSettled([
+  // Hard cap: 3 searches total
+  // 1) Amazon search engine call (+ ASIN hydration inside)
+  // 2) Google Shopping call (returns eBay + other retailer when available)
+  const [amazon, shopping] = await Promise.allSettled([
     fetchAmazonOffer(capped, strategy),
-    fetchEbayOffer(capped, strategy),
-    fetchMiscOffer(capped, strategy)
+    fetchShoppingVendors(capped, strategy)
   ]);
 
   const out = [];
-  for (const settled of [amazon, ebay, misc]) {
-    if (settled.status === 'fulfilled' && settled.value) out.push(settled.value);
-  }
+  if (amazon.status === 'fulfilled' && amazon.value) out.push(amazon.value);
+  if (shopping.status === 'fulfilled' && Array.isArray(shopping.value)) out.push(...shopping.value);
 
   // Ensure unique vendorIds.
   const seen = new Set();
@@ -245,4 +388,3 @@ async function fetchTopOffers({ query, strategy }) {
 module.exports = {
   fetchTopOffers
 };
-

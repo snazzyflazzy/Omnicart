@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const crypto = require('crypto');
 
 const { prisma } = require('./db');
 const config = require('./config');
@@ -36,6 +37,37 @@ const paymentService = createPaymentService();
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+
+function respondError(res, req, status, publicMessage, error) {
+  const payload = {
+    error: String(publicMessage || 'Server error'),
+    requestId: req?.requestId || null
+  };
+  if (config.nodeEnv !== 'production' && error) {
+    payload.detail = String(error?.message || error);
+  }
+  return res.status(status).json(payload);
+}
+
+function respond500(res, req, publicMessage, error) {
+  return respondError(res, req, 500, publicMessage, error);
+}
+
+// Add a requestId and simple access log (useful for debugging 500s from the iOS app).
+app.use((req, res, next) => {
+  req.requestId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  res.setHeader('x-request-id', req.requestId);
+
+  const start = process.hrtime.bigint();
+  res.on('finish', () => {
+    const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+    console.log(
+      `[${req.requestId}] ${req.method} ${req.originalUrl} -> ${res.statusCode} (${durationMs.toFixed(1)}ms)`
+    );
+  });
+
+  next();
+});
 
 function normalizeWhitespace(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -476,7 +508,7 @@ app.post('/debug/ai-ping', async (req, res) => {
     const result = await pingOpenAI();
     return res.json(result);
   } catch (error) {
-    return res.status(500).json({ error: error.message || 'OpenAI ping failed' });
+    return respond500(res, req, error?.message || 'OpenAI ping failed', error);
   }
 });
 
@@ -542,7 +574,7 @@ app.get('/demo/bootstrap', async (req, res) => {
         include: { addresses: true }
       });
     }
-    if (!user) return res.status(500).json({ error: 'Could not bootstrap user' });
+    if (!user) return respond500(res, req, 'Could not bootstrap user');
 
     return res.json({
       user: {
@@ -559,7 +591,7 @@ app.get('/demo/bootstrap', async (req, res) => {
     });
   } catch (error) {
     console.error('bootstrap failed', error);
-    return res.status(500).json({ error: 'Could not load bootstrap profile' });
+    return respond500(res, req, 'Could not load bootstrap profile', error);
   }
 });
 
@@ -585,7 +617,7 @@ app.get('/users/:id/settings', async (req, res) => {
     });
   } catch (error) {
     console.error('settings fetch failed', error);
-    return res.status(500).json({ error: 'Could not fetch settings' });
+    return respond500(res, req, 'Could not fetch settings', error);
   }
 });
 
@@ -632,7 +664,7 @@ app.put('/users/:id/settings', async (req, res) => {
     });
   } catch (error) {
     console.error('settings update failed', error);
-    return res.status(500).json({ error: 'Could not update settings' });
+    return respond500(res, req, 'Could not update settings', error);
   }
 });
 
@@ -663,7 +695,7 @@ app.post('/users/:id/addresses', async (req, res) => {
     return res.json({ address });
   } catch (error) {
     console.error('address upsert failed', error);
-    return res.status(500).json({ error: 'Could not save address' });
+    return respond500(res, req, 'Could not save address', error);
   }
 });
 
@@ -674,7 +706,7 @@ app.post('/recognize', async (req, res) => {
     return res.json(result);
   } catch (error) {
     console.error('recognize failed', error);
-    return res.status(500).json({ error: 'Recognition failed' });
+    return respond500(res, req, 'Recognition failed', error);
   }
 });
 
@@ -682,22 +714,23 @@ app.get('/products', async (req, res) => {
   const q = (req.query.q || '').toString().trim();
   const take = Math.min(Number(req.query.limit || 20), 50);
   try {
-    const products = await prisma.product.findMany({
-      where: q
-        ? {
-            OR: [
-              { title: { contains: q, mode: 'insensitive' } },
-              { brand: { contains: q, mode: 'insensitive' } }
-            ]
-          }
-        : undefined,
-      take,
-      orderBy: { title: 'asc' }
-    });
+    if (!q) return res.json({ products: [] });
+
+    const needle = q.toLowerCase();
+    const like = `%${needle.replace(/%/g, '\\%').replace(/_/g, '\\_')}%`;
+    const products = await prisma.$queryRaw`
+      SELECT id, title, brand, upc, imageUrl
+      FROM Product
+      WHERE lower(title) LIKE ${like} ESCAPE '\\'
+         OR lower(brand) LIKE ${like} ESCAPE '\\'
+         OR (upc IS NOT NULL AND upc LIKE ${like} ESCAPE '\\')
+      ORDER BY title ASC
+      LIMIT ${take}
+    `;
     return res.json({ products });
   } catch (error) {
     console.error('products search failed', error);
-    return res.status(500).json({ error: 'Could not search products' });
+    return respond500(res, req, 'Could not search products', error);
   }
 });
 
@@ -714,7 +747,7 @@ app.get('/offers', async (req, res) => {
     return res.json(bundle);
   } catch (error) {
     console.error('offers failed', error);
-    return res.status(500).json({ error: 'Could not fetch offers' });
+    return respond500(res, req, 'Could not fetch offers', error);
   }
 });
 
@@ -733,7 +766,7 @@ app.get('/offers/search', async (req, res) => {
     return res.json(result);
   } catch (error) {
     console.error('offers search failed', error);
-    return res.status(500).json({ error: 'Could not search offers' });
+    return respond500(res, req, 'Could not search offers', error);
   }
 });
 
@@ -816,7 +849,7 @@ app.post('/watchlist', async (req, res) => {
     return res.json({ watchItem: watchItemEnriched });
   } catch (error) {
     console.error('watchlist create failed', error);
-    return res.status(500).json({ error: 'Could not update watchlist' });
+    return respond500(res, req, 'Could not update watchlist', error);
   }
 });
 
@@ -853,7 +886,7 @@ app.get('/watchlist', async (req, res) => {
     return res.json({ items: enriched });
   } catch (error) {
     console.error('watchlist fetch failed', error);
-    return res.status(500).json({ error: 'Could not fetch watchlist' });
+    return respond500(res, req, 'Could not fetch watchlist', error);
   }
 });
 
@@ -888,7 +921,7 @@ app.post('/watchlist/refresh', async (req, res) => {
     return res.json({ ok: true, refreshedCount: items.length, items: enriched });
   } catch (error) {
     console.error('watchlist refresh failed', error);
-    return res.status(500).json({ error: 'Could not refresh watchlist prices' });
+    return respond500(res, req, 'Could not refresh watchlist prices', error);
   }
 });
 
@@ -899,7 +932,7 @@ app.delete('/watchlist/:id', async (req, res) => {
     return res.json({ ok: true });
   } catch (error) {
     console.error('watchlist delete failed', error);
-    return res.status(500).json({ error: 'Could not delete watch item' });
+    return respond500(res, req, 'Could not delete watch item', error);
   }
 });
 
@@ -949,7 +982,7 @@ app.post('/purchase', async (req, res) => {
     });
   } catch (error) {
     console.error('purchase failed', error);
-    return res.status(500).json({ error: 'Purchase failed' });
+    return respond500(res, req, 'Purchase failed', error);
   }
 });
 
@@ -964,7 +997,7 @@ app.get('/orders', async (req, res) => {
     return res.json({ orders });
   } catch (error) {
     console.error('orders fetch failed', error);
-    return res.status(500).json({ error: 'Could not fetch orders' });
+    return respond500(res, req, 'Could not fetch orders', error);
   }
 });
 
@@ -980,7 +1013,7 @@ app.get('/notifications/pending', async (req, res) => {
     return res.json({ notifications });
   } catch (error) {
     console.error('notifications fetch failed', error);
-    return res.status(500).json({ error: 'Could not fetch notifications' });
+    return respond500(res, req, 'Could not fetch notifications', error);
   }
 });
 
@@ -993,7 +1026,7 @@ app.post('/notifications/:id/ack', async (req, res) => {
     return res.json({ ok: true });
   } catch (error) {
     console.error('notification ack failed', error);
-    return res.status(500).json({ error: 'Could not ack notification' });
+    return respond500(res, req, 'Could not ack notification', error);
   }
 });
 
@@ -1003,7 +1036,7 @@ app.post('/simulate/priceTick', async (req, res) => {
     return res.json(result);
   } catch (error) {
     console.error('price tick failed', error);
-    return res.status(500).json({ error: 'Price tick failed' });
+    return respond500(res, req, 'Price tick failed', error);
   }
 });
 
@@ -1031,7 +1064,7 @@ app.post('/integrations/shared-watchlist/sync', async (req, res) => {
     return res.json(result);
   } catch (error) {
     console.error('shared watchlist sync failed', error);
-    return res.status(500).json({ error: 'Could not sync shared watchlist' });
+    return respond500(res, req, 'Could not sync shared watchlist', error);
   }
 });
 
@@ -1058,7 +1091,7 @@ app.get('/integrations/shared-watchlist/export', async (req, res) => {
     return res.json({ ok: true, userId: user.id, email, items: enriched });
   } catch (error) {
     console.error('shared watchlist export failed', error);
-    return res.status(500).json({ error: 'Could not export watchlist' });
+    return respond500(res, req, 'Could not export watchlist', error);
   }
 });
 
@@ -1138,11 +1171,52 @@ app.post('/integrations/extension/price-drop-webhook', async (req, res) => {
     return res.json({ ok: true, offer: offer ? normalizeOffer(offer) : null, notificationId: notification.id });
   } catch (error) {
     console.error('extension webhook failed', error);
-    return res.status(500).json({ error: 'Could not process extension webhook' });
+    return respond500(res, req, 'Could not process extension webhook', error);
   }
 });
 
-app.listen(config.port, () => {
-  console.log(`OmniCart backend listening on http://localhost:${config.port}`);
+// JSON parse errors / payload too large, etc.
+app.use((err, req, res, next) => {
+  if (err?.type === 'entity.too.large') {
+    return respondError(res, req, 413, 'Payload too large (try reducing image size)', err);
+  }
+  if (err instanceof SyntaxError && String(err?.message || '').toLowerCase().includes('json')) {
+    return respondError(res, req, 400, 'Invalid JSON', err);
+  }
+  console.error(`[${req?.requestId || 'no-reqid'}] unhandled error`, err);
+  return respond500(res, req, 'Server error', err);
 });
 
+let server = null;
+function startServer(attempt = 0) {
+  const port = config.port;
+  try {
+    server = app.listen(port, () => {
+      console.log(`OmniCart backend listening on http://localhost:${port}`);
+    });
+    server.on('error', (err) => {
+      // Nodemon restarts can race with the old process releasing the port on macOS.
+      if (err && err.code === 'EADDRINUSE' && attempt < 6) {
+        const delay = 250 * Math.max(1, attempt + 1);
+        console.warn(`Port ${port} in use; retrying in ${delay}ms...`);
+        setTimeout(() => startServer(attempt + 1), delay);
+        return;
+      }
+      console.error('Server listen failed', err);
+      process.exit(1);
+    });
+  } catch (err) {
+    console.error('Server start failed', err);
+    process.exit(1);
+  }
+}
+
+startServer();
+
+process.on('unhandledRejection', (reason) => {
+  console.error('unhandledRejection', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('uncaughtException', err);
+  process.exit(1);
+});

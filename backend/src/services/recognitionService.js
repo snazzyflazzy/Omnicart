@@ -158,7 +158,14 @@ async function recognizeByTextHints(textHints) {
 async function recognizeByImage(imageBase64, textHints) {
   if (!config.enableAIRecognition || !imageBase64) return null;
 
-  const ai = await analyzeProductPhoto({ imageBase64, ocrHints: textHints || [] });
+  let ai = null;
+  try {
+    ai = await analyzeProductPhoto({ imageBase64, ocrHints: textHints || [] });
+  } catch (error) {
+    // Never 500 recognition just because OpenAI timed out / rate limited.
+    // We simply fall back to other heuristics / manual search.
+    return null;
+  }
   if (!ai?.ok) return null;
   const parsed = ai.parsedModelOutput;
   if (!parsed || typeof parsed !== 'object') return null;
@@ -230,4 +237,3 @@ async function recognizeProduct({ imageBase64, upc, textHints }) {
 }
 
 module.exports = { recognizeProduct };
-
